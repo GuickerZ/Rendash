@@ -1,0 +1,475 @@
+// Prisma Schema completo para o Rendash
+// Compatível com PostgreSQL (Vercel Postgres, Neon, Supabase)
+// Projetado para alta performance em ambiente Serverless com PgBouncer / Prisma Accelerate
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL") // Connection pooling url
+  directUrl = env("POSTGRES_URL_NON_POOLING") // Direct connection for migrations
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// ENUMS DE SISTEMA E DOMÍNIO FINANCEIRO
+// ----------------------------------------------------
+
+enum UserRole {
+  USER
+  ADMIN
+  PRIME_USER
+}
+
+enum InvestorProfile {
+  CONSERVADOR
+  MODERADO
+  ARROJADO
+}
+
+enum AccountContext {
+  PESSOAL
+  EMPRESA
+}
+
+enum AccountType {
+  CHECKING // Conta corrente
+  SAVINGS  // Poupança
+  INVESTMENT // Conta investimento
+  PAYMENT // Conta de pagamento
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  INVESTMENT
+  REDEMPTION
+}
+
+enum TransactionStatus {
+  PAGO
+  EM_PROCESSO
+  BLOQUEADO
+  CANCELADO
+  FALHA
+}
+
+enum AssetCategory {
+  RENDA_FIXA
+  ACOES
+  FUNDOS
+  CRIPTO
+}
+
+enum OpenFinanceStatus {
+  CONNECTED
+  SYNCING
+  DISCONNECTED
+  ERROR
+}
+
+enum CardStatus {
+  ACTIVE
+  BLOCKED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  ABERTA
+  FECHADA
+  PAGA
+  ATRASADA
+}
+
+enum NotificationType {
+  RENDIMENTOS
+  ALERTAS
+  SISTEMA
+  SEGURANCA
+}
+
+// ----------------------------------------------------
+// USUÁRIOS E AUTENTICAÇÃO
+// ----------------------------------------------------
+
+model User {
+  id                    String            @id @default(uuid())
+  name                  String
+  email                 String            @unique
+  cpf                   String            @unique
+  phone                 String?
+  passwordHash          String
+  role                  UserRole          @default(USER)
+  investorProfile       InvestorProfile   @default(MODERADO)
+  isVerified            Boolean           @default(false)
+  hideBalanceOnOpen     Boolean           @default(false)
+  securityScore         Int               @default(92)
+  
+  // Biometria e Segurança
+  biometricsEnabled     Boolean           @default(true)
+  biometricThreshold    Decimal           @default(1000.00) @db.Decimal(12, 2)
+  biometricPublicKey    String?
+  twoFactorEnabled      Boolean           @default(true)
+
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  // Relações
+  sessions              Session[]
+  devices               AuthorizedDevice[]
+  companies             CompanyMember[]
+  bankAccounts          BankAccount[]
+  connectedInstitutions OpenFinanceInstitution[]
+  cards                 CreditCard[]
+  goals                 FinancialGoal[]
+  notifications         Notification[]
+  rules                 CategorizationRule[]
+  categories            Category[]
+
+  @@index([email])
+  @@index([cpf])
+}
+
+model AuthorizedDevice {
+  id          String   @id @default(uuid())
+  userId      String
+  deviceName  String
+  deviceModel String
+  ipAddress   String?
+  lastActive  DateTime @default(now())
+  isCurrent   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  refreshToken String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ----------------------------------------------------
+// CONTEXTO EMPRESARIAL (PJ)
+// ----------------------------------------------------
+
+model Company {
+  id                 String          @id @default(uuid())
+  tradeName          String          // Nome Fantasia (Ex: Lumina Studio)
+  legalName          String          // Razão Social (Ex: Lumina Studio Ltda.)
+  cnpj               String          @unique
+  currentCashflow    Decimal         @default(0.00) @db.Decimal(12, 2)
+  projectedCashflow  Decimal         @default(0.00) @db.Decimal(12, 2)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  members            CompanyMember[]
+  accounts           BankAccount[]
+  invoicesReceivable AccountReceivable[]
+  payables           AccountPayable[]
+
+  @@index([cnpj])
+}
+
+model CompanyMember {
+  id        String   @id @default(uuid())
+  userId    String
+  companyId String
+  role      String   @default("SOCIO") // SOCIO, FINANCEIRO, CONSULTOR
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+}
+
+model AccountReceivable {
+  id          String   @id @default(uuid())
+  companyId   String
+  documentId  String   // Ex: NF 2026-184
+  clientName  String   // Ex: Amora Tech
+  amount      Decimal  @db.Decimal(12, 2)
+  dueDate     DateTime
+  isSettled   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, dueDate])
+}
+
+model AccountPayable {
+  id          String   @id @default(uuid())
+  companyId   String
+  description String   // Ex: Folha de Pagamento - 12 colaboradores
+  amount      Decimal  @db.Decimal(12, 2)
+  dueDate     DateTime
+  isPaid      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, dueDate])
+}
+
+// ----------------------------------------------------
+// OPEN FINANCE E CONTAS BANCÁRIAS
+// ----------------------------------------------------
+
+model OpenFinanceInstitution {
+  id                 String            @id @default(uuid())
+  userId             String
+  institutionName    String            // Itaú, Nubank, Banco do Brasil
+  institutionCode    String            // 60701190
+  logoUrl            String?
+  consentId          String            @unique
+  consentValidUntil  DateTime
+  status             OpenFinanceStatus @default(CONNECTED)
+  lastSyncedAt       DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts           BankAccount[]
+
+  @@index([userId, status])
+}
+
+model BankAccount {
+  id                 String                  @id @default(uuid())
+  userId             String
+  companyId          String?
+  institutionId      String?
+  accountNumber      String                  // •• 2891
+  agencyNumber       String?
+  accountType        AccountType             @default(CHECKING)
+  context            AccountContext          @default(PESSOAL)
+  balance            Decimal                 @default(0.00) @db.Decimal(12, 2)
+  isPrimary          Boolean                 @default(false)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  user               User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company            Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  institution        OpenFinanceInstitution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  transactions       Transaction[]
+  investments        InvestmentPosition[]
+
+  @@index([userId, context])
+  @@index([companyId])
+}
+
+// ----------------------------------------------------
+// TRANSAÇÕES, PIX E EXTRATOS
+// ----------------------------------------------------
+
+model Category {
+  id           String               @id @default(uuid())
+  userId       String?              // Null se categoria padrão do sistema
+  name         String               // Alimentação, Moradia, Mobilidade, etc.
+  iconName     String               // Lucide icon name
+  budgetAmount Decimal?             @db.Decimal(12, 2)
+  isExpense    Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+
+  user         User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  rules        CategorizationRule[]
+
+  @@index([userId])
+}
+
+model CategorizationRule {
+  id             String    @id @default(uuid())
+  userId         String
+  categoryId     String
+  patternText    String    // Ex: "Uber", "Marina Costa", "Petrobras"
+  applyAutomatic Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category       Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Transaction {
+  id                String            @id @default(uuid())
+  bankAccountId     String
+  categoryId        String?
+  title             String            // Ex: "Supermercado Zona Sul"
+  amount            Decimal           @db.Decimal(12, 2)
+  type              TransactionType   @default(EXPENSE)
+  status            TransactionStatus @default(PAGO)
+  description       String?
+  occurredAt        DateTime
+  isPix             Boolean           @default(false)
+  endToEndId        String?           @unique // Identificador Pix BACEN
+  counterpartName   String?           // Ex: Marina Costa
+  counterpartDoc    String?           // CPF mascarado
+  createdAt         DateTime          @default(now())
+
+  account           BankAccount       @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  category          Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([bankAccountId, occurredAt])
+  @@index([categoryId])
+}
+
+// ----------------------------------------------------
+// INVESTIMENTOS E MERCADO
+// ----------------------------------------------------
+
+model Asset {
+  id             String               @id @default(uuid())
+  ticker         String               @unique // Ex: PETR4, SELIC2029, BTC
+  name           String               // Tesouro Selic 2029, Petrobras PN
+  category       AssetCategory        @default(RENDA_FIXA)
+  benchmarkRate  String?              // 112% CDI, IPCA + 6%
+  currentPrice   Decimal              @db.Decimal(12, 2)
+  variation24h   Decimal              @default(0.00) @db.Decimal(5, 2)
+  liquidityDays  Int                  @default(0) // 0 = D+0, 1 = D+1
+  maturityDate   DateTime?            // Vencimento (01 mar 2029)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  positions      InvestmentPosition[]
+
+  @@index([ticker])
+  @@index([category])
+}
+
+model InvestmentPosition {
+  id             String      @id @default(uuid())
+  bankAccountId  String
+  assetId        String
+  quantity       Decimal     @db.Decimal(14, 6)
+  averagePrice   Decimal     @db.Decimal(12, 2)
+  totalInvested  Decimal     @db.Decimal(12, 2)
+  currentValue   Decimal     @db.Decimal(12, 2)
+  grossReturn    Decimal     @db.Decimal(12, 2)
+  updatedAt      DateTime    @updatedAt
+
+  account        BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  asset          Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([bankAccountId, assetId])
+  @@index([bankAccountId])
+}
+
+// ----------------------------------------------------
+// METAS FINANCEIRAS
+// ----------------------------------------------------
+
+model FinancialGoal {
+  id             String    @id @default(uuid())
+  userId         String
+  title          String    // Reserva de emergência, Viagem para Europa
+  targetAmount   Decimal   @db.Decimal(12, 2)
+  currentAmount  Decimal   @db.Decimal(12, 2)
+  targetDate     DateTime  // Dez 2026
+  smartAdvice    String?   // Aporte R$ 500/mês para atingir no prazo.
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ----------------------------------------------------
+// CARTÃO DE CRÉDITO RENDASH PLATINUM & FATURAS
+// ----------------------------------------------------
+
+model CreditCard {
+  id                    String        @id @default(uuid())
+  userId                String
+  holderName            String        // GUILHERME M
+  lastFourDigits        String        @default("4821")
+  expiryDate            String        @default("09/31")
+  brand                 String        @default("VISA")
+  isVirtual             Boolean       @default(false)
+  status                CardStatus    @default(ACTIVE)
+  totalLimit            Decimal       @default(10000.00) @db.Decimal(12, 2)
+  adjustedLimit         Decimal       @default(8500.00) @db.Decimal(12, 2)
+  availableLimit        Decimal       @default(5713.10) @db.Decimal(12, 2)
+  
+  // Toggles de Segurança da Tela 41
+  allowContactless      Boolean       @default(true)
+  contactlessLimit      Decimal       @default(200.00) @db.Decimal(12, 2)
+  allowInternational    Boolean       @default(true)
+  requireBiometricOnline Boolean      @default(true)
+  
+  // Pontos e Benefícios
+  rewardPoints          Int           @default(1842)
+  loungeAccesses        Int           @default(2)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices              CardInvoice[]
+
+  @@index([userId])
+}
+
+model CardInvoice {
+  id              String             @id @default(uuid())
+  creditCardId    String
+  periodMonthYear String             // Setembro 2026
+  status          InvoiceStatus      @default(ABERTA)
+  totalAmount     Decimal            @db.Decimal(12, 2)
+  closingDate     DateTime           // 03 out 2026
+  dueDate         DateTime           // 10 out 2026
+  createdAt       DateTime           @default(now())
+
+  creditCard      CreditCard         @relation(fields: [creditCardId], references: [id], onDelete: Cascade)
+  items           CardPurchaseItem[]
+
+  @@index([creditCardId, periodMonthYear])
+}
+
+model CardPurchaseItem {
+  id              String      @id @default(uuid())
+  invoiceId       String
+  establishment   String      // Azul Linhas Aéreas, Coffee Lab
+  categoryName    String      // Viagens, Alimentação
+  amount          Decimal     @db.Decimal(12, 2)
+  installments    String?     // "2/6" ou "1x"
+  isOnline        Boolean     @default(true)
+  location        String?     // São Paulo
+  status          String      @default("PAGO")
+  purchasedAt     DateTime
+  createdAt       DateTime    @default(now())
+
+  invoice         CardInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, purchasedAt])
+}
+
+// ----------------------------------------------------
+// NOTIFICAÇÕES
+// ----------------------------------------------------
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType @default(ALERTAS)
+  title     String           // Rendimento creditado, Alerta de mercado
+  message   String           // Tesouro Selic rendeu R$ 45,20 hoje.
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}

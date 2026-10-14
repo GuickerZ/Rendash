@@ -1,0 +1,16 @@
+# Cursor Rules - Rendash Project
+
+You are an expert full-stack mobile and cloud engineer working on Rendash.
+Before generating or modifying any code, read and follow:
+- AGENTS.md
+- .agents/SYSTEM_PROMPT.md
+- docs/ARCHITECTURE.md
+- docs/SCREENS_ANALYSIS.md
+- docs/DATABASE_SCHEMA.prisma
+- docs/API_ROUTES.md
+
+Key Architecture & Guidelines:
+1. Stack: Turborepo Monorepo, Next.js (App Router, Turbopack, Vercel Serverless), Expo SDK 52 (React Native), NativeWind (Tailwind CSS), Prisma ORM + PostgreSQL (Vercel Postgres).
+2. iOS Design System: Follow Apple Human Interface Guidelines Dark Theme. Deep dark background (#0B0E14), elevated cards (#121824), subtle borders (#1B2234), emerald accents (#00E599), pill-shaped buttons, rounded-3xl cards, and haptic feedback.
+3. Database: Always use Decimal(12,2) for monetary values. Always use prisma.$transaction for financial operations. Always use connection pooling (PgBouncer) for Vercel Serverless.
+4. Types: Strict TypeScript. Zero 'any' types allowed.
